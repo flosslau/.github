@@ -1,0 +1,21 @@
+# Copyright 2026 Bruno Venceslau
+# SPDX-License-Identifier: Apache-2.0
+
+name: Attribution check
+description: >-
+  Refuses a pull request whose commits, title or description carry the
+  identity or the attribution line of a coding agent.
+
+runs:
+  using: composite
+  steps:
+    # The title, the description and the commit messages are untrusted text.
+    # The script reads them from the event file and from git, never from an
+    # expression expanded into this command line. It fetches the commits into
+    # a temporary repository of its own and checks out no file of the pull
+    # request.
+    - shell: bash
+      run: >-
+        python3 -I "$GITHUB_ACTION_PATH/check.py"
+        --event "$GITHUB_EVENT_PATH"
+        --remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
