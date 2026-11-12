@@ -25,6 +25,11 @@ concurrency:
 jobs:
   attribution:
     runs-on: ubuntu-latest
+    # The fetch has three attempts of 180 seconds with short pauses between
+    # them (check.py, FETCH_TIMEOUT_SECONDS and FETCH_BACKOFF_SECONDS), and
+    # every other git call ends within 30 seconds; this is the backstop for
+    # the whole job.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

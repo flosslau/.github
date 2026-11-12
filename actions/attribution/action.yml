@@ -6,6 +6,14 @@ description: >-
   Refuses a pull request whose commits, title or description carry the
   identity or the attribution line of a coding agent.
 
+inputs:
+  token:
+    description: >-
+      The token the fetch of the pull request's commits presents, as an
+      Authorization header. The job's own token is enough: the check reads
+      the repository and writes nothing.
+    default: ${{ github.token }}
+
 runs:
   using: composite
   steps:
@@ -13,8 +21,12 @@ runs:
     # The script reads them from the event file and from git, never from an
     # expression expanded into this command line. It fetches the commits into
     # a temporary repository of its own and checks out no file of the pull
-    # request.
+    # request. The token goes in through the environment, not the command
+    # line: the script takes it out of its environment before any git starts
+    # and gives it to the fetch alone.
     - shell: bash
+      env:
+        ATTRIBUTION_TOKEN: ${{ inputs.token }}
       run: >-
         python3 -I "$GITHUB_ACTION_PATH/check.py"
         --event "$GITHUB_EVENT_PATH"

@@ -13,12 +13,29 @@ Usage:
     check.py --event <pull_request event JSON> --repo <clone with the commits>
 
 With --remote the check fetches the base and the head commits of the event
-into a temporary repository of its own; no file of the pull request is
-checked out. --repo reads a clone that already holds them.
+into a temporary repository of its own, without their trees (a partial clone
+with --filter=tree:0: the messages and the identities are in the commits);
+no file of the pull request is checked out. The fetch brings the history the
+two commits reach, commits only, whatever the size of the pull request; a
+bound on that history waits for a run that is slow. --repo reads a clone
+that already holds the commits.
+
+A token for the fetch, when the repository needs one, comes in the
+environment variable ATTRIBUTION_TOKEN. The check removes it from its own
+environment before it starts any git, so no child inherits the variable
+(the process's own initial environment and the shell above it still hold
+it, readable by the same user on the runner), and hands it to the fetch
+alone, as an Authorization header through GIT_CONFIG_* variables: never on
+a command line, never in a file, and replaced by *** in a git error it
+prints. Nothing else of the environment is withheld from git.
+
+Every git call runs in a session of its own and ends within its timeout,
+its helpers with it (git-remote-https holds the header too). Needs git 2.44
+or newer: an older git ignores GIT_NO_LAZY_FETCH.
 
 Exit status: 0 nothing found, 1 at least one finding, 2 the check could not
-judge (not a pull request event, a commit that is missing or unreadable, any
-error it did not expect).
+judge (not a pull request event, a commit that is missing or unreadable, a
+fetch that failed three times, any error it did not expect).
 
 Python 3.11 or newer, standard library only: the check runs on a bare hosted
 runner, with no setup step and nothing to install.
@@ -27,19 +44,34 @@ runner, with no setup step and nothing to install.
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import dataclasses
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
 RULES_FILE = Path(__file__).resolve().parent / "rules.toml"
 NOREPLY_HOST = "users.noreply.github.com"
 MAX_FINDINGS_SHOWN = 50
+TOKEN_VARIABLE = "ATTRIBUTION_TOKEN"
+
+# Every git call ends: a hung one must not outlast the job. The fetch, the one
+# call that talks to the network, gets more time and three attempts in all,
+# with a pause between them; the sum stays inside the job's timeout-minutes
+# (test_the_worst_case_of_the_fetch_fits_in_the_job_timeout pins it).
+GIT_TIMEOUT_SECONDS = 30
+FETCH_TIMEOUT_SECONDS = 180
+FETCH_BACKOFF_SECONDS = (5, 10)  # the pauses before the second and the third attempt
+KILL_GRACE_SECONDS = 5  # after a timeout, how long the killed session gets to close its pipes
+JOB_TIMEOUT_MINUTES = 10
 
 # A trailer whose value ends with an address: "Co-authored-by: Name <a@b>".
 # The key starts the line, so an indented or quoted example does not match.
@@ -82,8 +114,8 @@ class Identity:
 @dataclasses.dataclass(frozen=True)
 class Commit:
     sha: str
-    author: Identity
-    committer: Identity
+    authors: tuple[Identity, ...]
+    committers: tuple[Identity, ...]
     message: str
 
 
@@ -154,20 +186,68 @@ def check_text(rules: list[Agent], where: str, text: str) -> list[str]:
     return found
 
 
-def git(repo: str, *args: str) -> bytes:
+def git_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment of every git call: no prompt, and no lazy fetch.
+
+    In a partial clone a git that meets a missing object fetches it from the
+    promisor remote by itself, and that fetch can start another: measured on
+    2026-11-12, against a remote that ignores the filter, it spawned fetches
+    until the process limit. Nothing here needs an object the fetch left out.
+    """
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1", **(extra or {})}
+
+
+def git(
+    repo: str,
+    *args: str,
+    timeout: float = GIT_TIMEOUT_SECONDS,
+    extra_env: dict[str, str] | None = None,
+    stdin: bytes | None = None,
+    redact: tuple[str, ...] = (),
+) -> bytes:
+    """Run one git command and return its output; an error is "cannot judge".
+
+    The command gets a session of its own, so that a timeout ends its helpers
+    too (git-remote-https, index-pack), which would otherwise outlive it and
+    keep the capture pipes, and the environment, open. The strings in
+    `redact` are replaced by *** in an error before it is printed.
+    """
     command = ["git", "--no-replace-objects", "-C", repo, *args]
     try:
-        return subprocess.run(
+        process = subprocess.Popen(
             command,
-            check=True,
-            capture_output=True,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        ).stdout
-    except (OSError, subprocess.CalledProcessError) as e:
-        detail = getattr(e, "stderr", b"") or str(e).encode()
-        raise CannotJudge(
-            f"git {args[0]} failed: {shown(detail.decode(errors='replace').strip())}"
-        ) from e
+            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=git_environment(extra_env),
+            start_new_session=True,
+        )
+    except OSError as e:
+        raise CannotJudge(f"git {args[0]} failed: {shown(str(e))}") from e
+    try:
+        out, err = process.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)  # the session: git and its helpers
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()  # git itself, whatever became of the session
+        try:
+            process.communicate(timeout=KILL_GRACE_SECONDS)  # the pipes close once the session is dead
+        except subprocess.TimeoutExpired:
+            # Something outlived the session and holds the pipes: its output is
+            # not worth waiting for, and the check must still end.
+            for pipe in (process.stdout, process.stderr):
+                pipe.close()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=KILL_GRACE_SECONDS)
+        raise CannotJudge(f"git {args[0]} did not end within {timeout:g} seconds") from e
+    if process.returncode != 0:
+        detail = err.decode(errors="replace")
+        for secret in redact:
+            if secret:
+                detail = detail.replace(secret, "***")
+        raise CannotJudge(f"git {args[0]} failed: {shown(detail.strip())}")
+    return out
 
 
 def read_identity(value: bytes) -> Identity | None:
@@ -183,33 +263,105 @@ def read_identity(value: bytes) -> Identity | None:
     )
 
 
-def read_commit(repo: str, sha: str) -> Commit:
-    """The commit as git stores it, so that no .mailmap rewrites who wrote it."""
-    raw = git(repo, "cat-file", "commit", sha)
+def parse_commit(sha: str, raw: bytes) -> Commit:
+    """The commit as git stores it, so that no .mailmap rewrites who wrote it.
+
+    Every author and every committer line is kept: readers disagree on which
+    one counts when a commit holds two, so each is judged. One that cannot be
+    read makes the commit unjudgeable.
+    """
     head, _, message = raw.partition(b"\n\n")
-    who = {}
+    who: dict[bytes, list[Identity]] = {b"author": [], b"committer": []}
     for line in head.split(b"\n"):
         role, _, value = line.partition(b" ")
-        if role in (b"author", b"committer") and (identity := read_identity(value)):
-            who[role] = identity
-    if len(who) != 2:
+        if role in who:
+            identity = read_identity(value)
+            if identity is None:
+                raise CannotJudge(f"commit {sha[:7]}: author or committer not readable")
+            who[role].append(identity)
+    if not who[b"author"] or not who[b"committer"]:
         raise CannotJudge(f"commit {sha[:7]}: author or committer not readable")
-    return Commit(sha, who[b"author"], who[b"committer"], message.decode(errors="replace"))
+    return Commit(
+        sha, tuple(who[b"author"]), tuple(who[b"committer"]), message.decode(errors="replace")
+    )
 
 
 def commits_of(repo: str, base: str, head: str) -> list[Commit]:
+    """The commits the pull request adds, oldest first, read in one git process."""
     shas = git(repo, "rev-list", "--reverse", f"{base}..{head}").decode().split()
-    return [read_commit(repo, sha) for sha in shas]
+    if not shas:
+        return []
+    batch = git(repo, "cat-file", "--batch", stdin="".join(f"{sha}\n" for sha in shas).encode())
+    commits, offset = [], 0
+    for sha in shas:
+        end = batch.find(b"\n", offset)
+        fields = batch[offset:end].split() if end >= 0 else []  # "<sha> commit <size>", or "<sha> missing"
+        if len(fields) != 3 or fields[0] != sha.encode() or fields[1] != b"commit":
+            raise CannotJudge(f"commit {sha[:7]}: not a commit the repository holds")
+        size = int(fields[2])
+        raw = batch[end + 1 : end + 1 + size]
+        if len(raw) != size:
+            raise CannotJudge(f"commit {sha[:7]}: cut short in git's answer")
+        offset = end + 1 + size + 1  # the newline git writes after each object
+        commits.append(parse_commit(sha, raw))
+    return commits
 
 
-def fetch(remote: str, into: str, base: str, head: str) -> None:
-    """Fetch the two commits, and their history, into an empty repository."""
+def authorization_header(token: str) -> str:
+    return "AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+
+def fetch_environment(remote: str, token: str) -> dict[str, str]:
+    """The token, for this fetch only, as the header actions/checkout sends.
+
+    GIT_CONFIG_* puts it in git's configuration for one process: not on the
+    command line, which `ps` shows, and not in a file of the repository.
+    """
+    if not token:
+        return {}
+    header = authorization_header(token)
+    # Appended after any entry the environment already holds, which stays.
+    try:
+        count = max(int(os.environ.get("GIT_CONFIG_COUNT", "0")), 0)
+    except ValueError:
+        count = 0
+    return {
+        "GIT_CONFIG_COUNT": str(count + 1),
+        f"GIT_CONFIG_KEY_{count}": f"http.{remote}.extraheader",
+        f"GIT_CONFIG_VALUE_{count}": header,
+    }
+
+
+def fetch(remote: str, into: str, base: str, head: str, token: str = "") -> None:
+    """Fetch the two commits, and their history without trees, into an empty repository.
+
+    The remote gets a name: git refuses a bare path as the promisor of a
+    filtered fetch. Three attempts in all, with the pauses of
+    FETCH_BACKOFF_SECONDS between them: every failure is retried, a timeout
+    or a refusal alike, since telling a passing one from a lasting one is not
+    worth the code, and the cost of retrying a lasting one is two pauses.
+    """
     git(into, "init", "--quiet")
-    git(into, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", remote, base, head)
+    git(into, "remote", "add", "origin", remote)
+    extra = fetch_environment(remote, token)
+    attempts = len(FETCH_BACKOFF_SECONDS) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            git(
+                into, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules",
+                "--filter=tree:0", "origin", base, head,
+                timeout=FETCH_TIMEOUT_SECONDS, extra_env=extra,
+                redact=(token, authorization_header(token)),
+            )
+            return
+        except CannotJudge as e:
+            if attempt == attempts:
+                raise CannotJudge(f"after {attempt} attempts, {e}") from e
+            time.sleep(FETCH_BACKOFF_SECONDS[attempt - 1])
 
 
 def check_pull_request(
-    rules: list[Agent], event: object, repo: str | None, remote: str | None
+    rules: list[Agent], event: object, repo: str | None, remote: str | None, token: str = ""
 ) -> list[str]:
     pr = event.get("pull_request") if isinstance(event, dict) else None
     if not isinstance(pr, dict):
@@ -229,19 +381,26 @@ def check_pull_request(
         found.append(f"pull request, opened by {shown(login)} ({agent})")
     found += check_text(rules, "pull request title", title)
     found += check_text(rules, "pull request description", body)
-    with tempfile.TemporaryDirectory(prefix="attribution-") as scratch:
+    # A scratch repository git could not fully remove is left behind, not a
+    # reason to fail: the runner is thrown away with it.
+    with tempfile.TemporaryDirectory(prefix="attribution-", ignore_cleanup_errors=True) as scratch:
         if remote is not None:
-            fetch(remote, scratch, base, head)
+            fetch(remote, scratch, base, head, token)
             repo = scratch
         for c in commits_of(repo, base, head):
             where = f"commit {c.sha[:7]}"
-            found += check_identity(rules, f"{where}, author", c.author)
-            found += check_identity(rules, f"{where}, committer", c.committer)
+            for who in c.authors:
+                found += check_identity(rules, f"{where}, author", who)
+            for who in c.committers:
+                found += check_identity(rules, f"{where}, committer", who)
             found += check_text(rules, f"{where}, message", c.message)
     return found
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Out of the environment before anything else runs: no child inherits the
+    # variable (this process's initial environment block still holds it).
+    token = os.environ.pop(TOKEN_VARIABLE, "")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--event", required=True, help="pull_request event JSON file")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -251,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with open(args.event, encoding="utf-8") as f:
             event = json.load(f)
-        found = check_pull_request(load_rules(), event, args.repo, args.remote)
+        found = check_pull_request(load_rules(), event, args.repo, args.remote, token)
     except Exception as e:  # anything unexpected is "cannot judge", never a finding
         why = str(e) if isinstance(e, CannotJudge) else f"{type(e).__name__}: {e}"
         print(f"attribution check: cannot judge: {shown(why)}")

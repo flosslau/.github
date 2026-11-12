@@ -48,7 +48,9 @@ agent it belongs to.
 
 To quote a refused line, in a commit message or a description, indent it,
 put it in a list or a quote, or use inline code: the check reads a line only
-from its first column.
+from its first column. One word that is not ASCII in front of the "Generated
+with" footer, an emoji or a bullet such as U+2022, does not make a quote: the
+footer comes with an emoji in front, and is refused with it.
 
 ### Using it in a repository
 
@@ -72,16 +74,31 @@ concurrency:
 jobs:
   attribution:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: flosslau/.github/actions/attribution@<commit SHA>
 ```
 
 - Pin the action to a commit of this repository's `main`. Nothing else needs a
   pin: the action uses no other action.
-- Keep the `permissions` block. The check needs no token and no secret.
+- Keep the `permissions` block: `contents: read` is all the check needs. The
+  job's own token is passed to the fetch (the action's input `token`, which
+  defaults to it), as an Authorization header for the repository's host and
+  for nothing else; no secret is needed, on a public or a private
+  repository. On a pull request from a fork that token can only read, which
+  is all the check does. Whatever token a caller passes instead goes to that
+  same host.
+- Keep `timeout-minutes: 10`. The fetch has three attempts of 180 seconds
+  with short pauses between them, and every other git call ends within 30
+  seconds; the job's timeout is the backstop.
 - Use `pull_request`, as above, and not `pull_request_target`.
 - The job needs no checkout step. The action fetches the commits of the pull
-  request into a temporary repository and checks out none of its files.
+  request, without their trees, into a temporary repository and checks out
+  none of its files. The fetch brings the commit history the two commits
+  reach, whatever the size of the pull request; a bound on it waits for a
+  run that is slow.
+- The runner needs git 2.44 or newer (`ubuntu-latest` has it): an older git
+  ignores the setting that keeps the fetch from asking for missing objects.
 - To make the check binding, require the `attribution` status check on the
   default branch.
 
@@ -90,8 +107,6 @@ What it does not do:
 - It reads pull requests only. A commit pushed straight to a branch is not
   judged, which a rule that requires pull requests on the default branch
   covers.
-- It fetches without credentials, so it works on public repositories. On a
-  private one it ends with "cannot judge".
 - A run started again by hand reads the title and the description of the
   first time. Edit the pull request, or push, to have the current ones judged.
 - In this repository itself a pull request can change the check that judges
