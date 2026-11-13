@@ -670,12 +670,8 @@ class CannotJudge(Case):
 
     def test_commit_missing_from_the_remote(self):
         event = {"pull_request": {"base": {"sha": self.repo.base}, "head": {"sha": "0" * 40}}}
-        self.cannot_judge("git fetch failed", event=event, source="--remote")
-
-    def test_remote_that_does_not_exist(self):
-        self.repo.dir = str(self.root / "nowhere")
-        event = {"pull_request": {"base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}
-        self.cannot_judge("git fetch failed", event=event, source="--remote")
+        with mock.patch.object(check.time, "sleep"):
+            self.cannot_judge("after 3 attempts, git fetch failed", event=event, source="--remote")
 
     def test_git_that_cannot_be_started(self):
         event = {"pull_request": {"base": {"sha": self.repo.base}, "head": {"sha": self.repo.base}}}
@@ -693,7 +689,7 @@ class CannotJudge(Case):
         self.assertEqual(process.communicate.call_args_list[0].kwargs["timeout"], check.GIT_TIMEOUT_SECONDS)
         killpg.assert_called_once_with(4242, check.signal.SIGKILL)
 
-    def test_fetch_that_fails_three_times(self):
+    def test_fetch_from_a_remote_that_does_not_exist_fails_three_times(self):
         self.repo.dir = str(self.root / "nowhere")
         event = {"pull_request": {"base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}
         with mock.patch.object(check.time, "sleep") as sleep, mock.patch.object(check, "git", wraps=check.git) as git:
