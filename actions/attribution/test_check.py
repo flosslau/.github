@@ -645,15 +645,16 @@ class CannotJudge(Case):
 
     def test_event_with_values_of_the_wrong_type(self):
         ok = {"base": {"sha": self.repo.base}, "head": {"sha": self.repo.base}}
-        for name, event in {
-            "event is a list": [],
-            "title is a number": {"pull_request": {**ok, "title": 5}},
-            "description is a list": {"pull_request": {**ok, "body": ["x"]}},
-            "user is a string": {"pull_request": {**ok, "user": "x"}},
-            "commit id is a number": {"pull_request": {**ok, "base": {"sha": 5}}},
+        for name, (event, needle) in {
+            "event is a list": ([], "the event is not a pull request event"),
+            "title is a number": ({"pull_request": {**ok, "title": 5}}, "the event's title is not text"),
+            "description is a list": ({"pull_request": {**ok, "body": ["x"]}}, "the event's description is not text"),
+            "user is a string": ({"pull_request": {**ok, "user": "x"}}, "the event's user is not an object"),
+            "login is a number": ({"pull_request": {**ok, "user": {"login": 5}}}, "the event's user login is not text"),
+            "commit id is a number": ({"pull_request": {**ok, "base": {"sha": 5}}}, "not a commit id: 5"),
         }.items():
             with self.subTest(name):
-                self.cannot_judge("cannot judge", event=event)
+                self.cannot_judge(f"cannot judge: {needle}", event=event)
 
     def test_rules_file_that_is_broken(self):
         self.repo.commit("feat: x")

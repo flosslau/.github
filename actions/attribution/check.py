@@ -119,6 +119,17 @@ class Commit:
     message: str
 
 
+@dataclasses.dataclass(frozen=True)
+class PullRequest:
+    """What the check reads of the event, read once and checked on the way in."""
+
+    base: str  # a commit id, 40 or 64 hex digits
+    head: str
+    login: str  # who opened it; empty when the event does not say
+    title: str
+    body: str
+
+
 def load_rules(path: Path = RULES_FILE) -> list[Agent]:
     with path.open("rb") as f:
         data = tomllib.load(f)
@@ -365,34 +376,57 @@ def fetch(remote: str, into: str, base: str, head: str, token: str = "") -> None
             time.sleep(FETCH_BACKOFF_SECONDS[attempt - 1])
 
 
-def check_pull_request(
-    rules: list[Agent], event: object, repo: str | None, remote: str | None, token: str = ""
-) -> list[str]:
+def read_pull_request(event: object) -> PullRequest:
+    """The pull request of a pull_request event; anything else cannot be judged."""
     pr = event.get("pull_request") if isinstance(event, dict) else None
     if not isinstance(pr, dict):
         raise CannotJudge("the event is not a pull request event")
+    user = pr.get("user") or {}
+    if not isinstance(user, dict):
+        raise CannotJudge("the event's user is not an object")
+    return PullRequest(
+        base=commit_id(pr, "base"),
+        head=commit_id(pr, "head"),
+        login=event_text(user.get("login"), "user login"),
+        title=event_text(pr.get("title"), "title"),
+        body=event_text(pr.get("body"), "description"),
+    )
+
+
+def commit_id(pr: dict, side: str) -> str:
     try:
-        base, head = pr["base"]["sha"], pr["head"]["sha"]
+        sha = pr[side]["sha"]
     except (KeyError, TypeError) as e:
         raise CannotJudge(f"the event lacks {e}") from e
-    for sha in (base, head):
-        if not (isinstance(sha, str) and SHA.fullmatch(sha)):
-            raise CannotJudge(f"not a commit id: {shown(str(sha))}")
-    login = (pr.get("user") or {}).get("login") or ""
-    title, body = pr.get("title") or "", pr.get("body") or ""
+    if not (isinstance(sha, str) and SHA.fullmatch(sha)):
+        raise CannotJudge(f"not a commit id: {shown(str(sha))}")
+    return sha
 
+
+def event_text(value: object, what: str) -> str:
+    """A text of the event; absent or null reads as empty."""
+    value = value or ""
+    if not isinstance(value, str):
+        raise CannotJudge(f"the event's {what} is not text")
+    return value
+
+
+def check_pull_request(
+    rules: list[Agent], event: object, repo: str | None, remote: str | None, token: str = ""
+) -> list[str]:
+    pr = read_pull_request(event)
     found = []
-    if agent := agent_of_login(rules, login):
-        found.append(f"pull request, opened by {shown(login)} ({agent})")
-    found += check_text(rules, "pull request title", title)
-    found += check_text(rules, "pull request description", body)
+    if agent := agent_of_login(rules, pr.login):
+        found.append(f"pull request, opened by {shown(pr.login)} ({agent})")
+    found += check_text(rules, "pull request title", pr.title)
+    found += check_text(rules, "pull request description", pr.body)
     # A scratch repository git could not fully remove is left behind, not a
     # reason to fail: the runner is thrown away with it.
     with tempfile.TemporaryDirectory(prefix="attribution-", ignore_cleanup_errors=True) as scratch:
         if remote is not None:
-            fetch(remote, scratch, base, head, token)
+            fetch(remote, scratch, pr.base, pr.head, token)
             repo = scratch
-        for c in commits_of(repo, base, head):
+        for c in commits_of(repo, pr.base, pr.head):
             where = f"commit {c.sha[:7]}"
             for who in c.authors:
                 found += check_identity(rules, f"{where}, author", who)
