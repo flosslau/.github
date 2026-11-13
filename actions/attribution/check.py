@@ -227,19 +227,7 @@ def git(
     try:
         out, err = process.communicate(stdin, timeout=timeout)
     except subprocess.TimeoutExpired as e:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)  # the session: git and its helpers
-        with contextlib.suppress(ProcessLookupError):
-            process.kill()  # git itself, whatever became of the session
-        try:
-            process.communicate(timeout=KILL_GRACE_SECONDS)  # the pipes close once the session is dead
-        except subprocess.TimeoutExpired:
-            # Something outlived the session and holds the pipes: its output is
-            # not worth waiting for, and the check must still end.
-            for pipe in (process.stdout, process.stderr):
-                pipe.close()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=KILL_GRACE_SECONDS)
+        end_session(process)
         raise CannotJudge(f"git {args[0]} did not end within {timeout:g} seconds") from e
     if process.returncode != 0:
         detail = err.decode(errors="replace")
@@ -248,6 +236,23 @@ def git(
                 detail = detail.replace(secret, "***")
         raise CannotJudge(f"git {args[0]} failed: {shown(detail.strip())}")
     return out
+
+
+def end_session(process: subprocess.Popen) -> None:
+    """Kill a git that ran out of time, with its session, and stop waiting on it."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)  # the session: git and its helpers
+    with contextlib.suppress(ProcessLookupError):
+        process.kill()  # git itself, whatever became of the session
+    try:
+        process.communicate(timeout=KILL_GRACE_SECONDS)  # the pipes close once the session is dead
+    except subprocess.TimeoutExpired:
+        # Something outlived the session and holds the pipes: its output is
+        # not worth waiting for, and the check must still end.
+        for pipe in (process.stdout, process.stderr):
+            pipe.close()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=KILL_GRACE_SECONDS)
 
 
 def read_identity(value: bytes) -> Identity | None:
