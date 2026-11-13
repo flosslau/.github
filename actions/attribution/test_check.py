@@ -663,6 +663,7 @@ class CannotJudge(Case):
             ("null head", {"base": good, "head": None}, "the event lacks the head commit id"),
             ("base is text", {"base": "main", "head": good}, "the event lacks the base commit id"),
             ("head without its id", {"base": good, "head": {}}, "the event lacks the head commit id"),
+            ("base id is null", {"base": {"sha": None}, "head": good}, "the event lacks the base commit id"),
         ):
             with self.subTest(name):
                 self.cannot_judge(f"cannot judge: {needle}", event={"pull_request": sides})
