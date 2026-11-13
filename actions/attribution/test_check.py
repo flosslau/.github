@@ -689,6 +689,19 @@ class CannotJudge(Case):
         self.assertEqual(process.communicate.call_args_list[0].kwargs["timeout"], check.GIT_TIMEOUT_SECONDS)
         killpg.assert_called_once_with(4242, check.signal.SIGKILL)
 
+    def test_git_whose_killed_session_still_holds_its_pipes_is_given_up_on(self):
+        event = {"pull_request": {"base": {"sha": self.repo.base}, "head": {"sha": self.repo.base}}}
+        process = mock.Mock(pid=4242)
+        process.communicate.side_effect = subprocess.TimeoutExpired(["git"], 30)
+        process.wait.side_effect = subprocess.TimeoutExpired(["git"], 5)
+        with mock.patch.object(check.subprocess, "Popen", return_value=process), \
+                mock.patch.object(check.os, "killpg"):
+            self.cannot_judge("git rev-list did not end within 30 seconds", event=event)
+        self.assertEqual(process.communicate.call_args_list[1].kwargs["timeout"], check.KILL_GRACE_SECONDS)
+        process.stdout.close.assert_called_once_with()
+        process.stderr.close.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=check.KILL_GRACE_SECONDS)
+
     def test_fetch_from_a_remote_that_does_not_exist_fails_three_times(self):
         self.repo.dir = str(self.root / "nowhere")
         event = {"pull_request": {"base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}
