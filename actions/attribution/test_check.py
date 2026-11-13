@@ -613,7 +613,7 @@ class CannotJudge(Case):
         self.cannot_judge("not a pull request event", event={"ref": "refs/heads/main"})
 
     def test_event_without_commit_ids(self):
-        self.cannot_judge("lacks", event={"pull_request": {"title": "x"}})
+        self.cannot_judge("cannot judge: the event lacks the base commit id", event={"pull_request": {"title": "x"}})
 
     def test_commit_id_that_is_not_one(self):
         event = {"pull_request": {"base": {"sha": "--all"}, "head": {"sha": self.repo.base}}}
@@ -656,9 +656,16 @@ class CannotJudge(Case):
                     event = {"pull_request": {"base": {"sha": ids["base"]}, "head": {"sha": ids["head"]}}}
                     self.cannot_judge("not a commit id", event=event)
 
-    def test_event_with_a_null_base(self):
-        event = {"pull_request": {"base": None, "head": {"sha": self.repo.base}}}
-        self.cannot_judge("lacks", event=event)
+    def test_event_with_a_null_or_malformed_side(self):
+        good = {"sha": self.repo.base}
+        for name, sides, needle in (
+            ("null base", {"base": None, "head": good}, "the event lacks the base commit id"),
+            ("null head", {"base": good, "head": None}, "the event lacks the head commit id"),
+            ("base is text", {"base": "main", "head": good}, "the event lacks the base commit id"),
+            ("head without its id", {"base": good, "head": {}}, "the event lacks the head commit id"),
+        ):
+            with self.subTest(name):
+                self.cannot_judge(f"cannot judge: {needle}", event={"pull_request": sides})
 
     def test_event_file_that_does_not_exist(self):
         with contextlib.redirect_stdout(io.StringIO()) as out:

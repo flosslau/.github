@@ -394,10 +394,11 @@ def read_pull_request(event: object) -> PullRequest:
 
 
 def commit_id(pr: dict, side: str) -> str:
-    try:
-        sha = pr[side]["sha"]
-    except (KeyError, TypeError) as e:
-        raise CannotJudge(f"the event lacks {e}") from e
+    """The commit id of one side of the pull request, "base" or "head"."""
+    ref = pr.get(side)
+    sha = ref.get("sha") if isinstance(ref, dict) else None
+    if sha is None:
+        raise CannotJudge(f"the event lacks the {side} commit id")
     if not (isinstance(sha, str) and SHA.fullmatch(sha)):
         raise CannotJudge(f"not a commit id: {shown(str(sha))}")
     return sha
