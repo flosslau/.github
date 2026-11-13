@@ -1,0 +1,110 @@
+# Copyright 2026 Bruno Venceslau
+# SPDX-License-Identifier: Apache-2.0
+
+# The identities and lines the attribution check refuses.
+#
+# A rule enters this file only with evidence: a string measured in real
+# commits, an account that exists on GitHub, or a quote from the tool's own
+# source. Each entry says which. Nothing here matches a bare name: a person
+# called Claude, or a message that only mentions a tool, must pass.
+#
+# Keys of an [[agent]] table:
+#   name           how the finding names the tool
+#   emails         exact e-mail addresses, compared without regard to case
+#   logins         GitHub logins; one matches the author of a pull request
+#                  and the address <login>@users.noreply.github.com, with or
+#                  without the numeric id GitHub puts in front
+#   name_suffixes  endings of an author or committer name
+#   lines          regular expressions searched in each line of a commit
+#                  message and of a pull request title and description
+#
+# The counts are public commits found by the GitHub commit search on
+# 2026-11-12, by author e-mail unless said otherwise.
+
+[[agent]]
+name = "Claude Code"
+# 26.8 million commits; also the author and the co-author trailer measured in
+# this organization's own history.
+emails = ["noreply@anthropic.com"]
+# The account exists (id 209825114, type Bot).
+logins = ["claude[bot]"]
+# Both lines were measured in this organization's own history. The footer
+# comes with or without an emoji in front, so the pattern allows one word
+# that is not ASCII there; a Markdown bullet or a quote mark is ASCII.
+lines = [
+  '^Claude-Session:\s',
+  '^([^\x00-\x7f]+\s)?Generated with \[Claude Code\]\(',
+]
+
+[[agent]]
+name = "GitHub Copilot"
+# copilot@github.com: 89 thousand commits.
+emails = ["copilot@github.com"]
+# "Copilot" is the login behind copilot-swe-agent[bot] (id 198982749, type
+# Bot); its noreply address authors 4.3 million commits.
+logins = ["Copilot", "copilot-swe-agent[bot]"]
+
+[[agent]]
+name = "Cursor"
+# 2.6 million commits.
+emails = ["cursoragent@cursor.com"]
+# The account exists (id 206951365, type Bot).
+logins = ["cursor[bot]"]
+
+[[agent]]
+name = "OpenAI Codex"
+# codex@openai.com: 756 thousand commits. noreply@openai.com: 52 thousand.
+emails = ["codex@openai.com", "noreply@openai.com"]
+# Both accounts exist (ids 199175422 and 215057067, type Bot).
+logins = ["chatgpt-codex-connector[bot]", "openai-codex[bot]"]
+
+[[agent]]
+name = "Amp"
+# 37 thousand commits.
+emails = ["amp@ampcode.com"]
+# 174 thousand commit messages hold this trailer.
+lines = ['^Amp-Thread-ID:\s']
+
+[[agent]]
+name = "Aider"
+# Aider's source builds the co-author trailer with this address and adds
+# " (aider)" to the author and committer names (aider/repo.py).
+emails = ["aider@aider.chat"]
+name_suffixes = [" (aider)"]
+
+[[agent]]
+name = "Junie"
+# 5.6 thousand commits.
+emails = ["junie@jetbrains.com"]
+
+[[agent]]
+name = "OpenCode"
+# 2.2 thousand commits.
+emails = ["noreply@opencode.ai"]
+# The account exists (id 219766164, type Bot).
+logins = ["opencode-agent[bot]"]
+
+[[agent]]
+name = "Warp"
+# 866 commits.
+emails = ["agent@warp.dev"]
+
+[[agent]]
+name = "Devin"
+# The account exists (id 158243242, type Bot).
+logins = ["devin-ai-integration[bot]"]
+
+[[agent]]
+name = "Jules"
+# The account exists (id 161369871, type Bot).
+logins = ["google-labs-jules[bot]"]
+
+[[agent]]
+name = "Gemini CLI"
+# The account exists (id 218312386, type Bot).
+logins = ["gemini-cli[bot]"]
+
+[[agent]]
+name = "Factory Droid"
+# The account exists (id 138933559, type Bot).
+logins = ["factory-droid[bot]"]

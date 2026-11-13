@@ -1,0 +1,37 @@
+# Copyright 2026 Bruno Venceslau
+# SPDX-License-Identifier: Apache-2.0
+
+name: Attribution
+
+# This repository runs the check on itself, from the pull request's own copy,
+# so here a pull request can change the code that judges it: the result is a
+# convenience for its author, and a review decides. The repositories that call
+# the action pin it to a commit of this one and are not affected.
+#
+# "edited" is among the types because a merge commit takes the title of the
+# pull request, which can change after a green run.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: attribution-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    # The fetch has three attempts of 180 seconds with short pauses between
+    # them (check.py, FETCH_TIMEOUT_SECONDS and FETCH_BACKOFF_SECONDS), and
+    # every other git call ends within 30 seconds; this is the backstop for
+    # the whole job.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/attribution
