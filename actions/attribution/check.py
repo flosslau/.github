@@ -413,7 +413,7 @@ def event_text(value: object, what: str) -> str:
     return value
 
 
-def check_pull_request_text(rules: list[Agent], pr: PullRequest) -> list[str]:
+def check_pull_request_fields(rules: list[Agent], pr: PullRequest) -> list[str]:
     found = []
     if agent := agent_of_login(rules, pr.login):
         found.append(f"pull request, opened by {shown(pr.login)} ({agent})")
@@ -435,7 +435,7 @@ def check_pull_request(
     rules: list[Agent], event: object, repo: str | None, remote: str | None, token: str = ""
 ) -> list[str]:
     pr = read_pull_request(event)
-    found = check_pull_request_text(rules, pr)
+    found = check_pull_request_fields(rules, pr)
     # A scratch repository git could not fully remove is left behind, not a
     # reason to fail: the runner is thrown away with it.
     with tempfile.TemporaryDirectory(prefix="attribution-", ignore_cleanup_errors=True) as scratch:
