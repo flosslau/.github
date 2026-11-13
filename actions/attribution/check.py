@@ -411,15 +411,29 @@ def event_text(value: object, what: str) -> str:
     return value
 
 
-def check_pull_request(
-    rules: list[Agent], event: object, repo: str | None, remote: str | None, token: str = ""
-) -> list[str]:
-    pr = read_pull_request(event)
+def check_pull_request_text(rules: list[Agent], pr: PullRequest) -> list[str]:
     found = []
     if agent := agent_of_login(rules, pr.login):
         found.append(f"pull request, opened by {shown(pr.login)} ({agent})")
     found += check_text(rules, "pull request title", pr.title)
-    found += check_text(rules, "pull request description", pr.body)
+    return found + check_text(rules, "pull request description", pr.body)
+
+
+def check_commit(rules: list[Agent], c: Commit) -> list[str]:
+    where = f"commit {c.sha[:7]}"
+    found = []
+    for who in c.authors:
+        found += check_identity(rules, f"{where}, author", who)
+    for who in c.committers:
+        found += check_identity(rules, f"{where}, committer", who)
+    return found + check_text(rules, f"{where}, message", c.message)
+
+
+def check_pull_request(
+    rules: list[Agent], event: object, repo: str | None, remote: str | None, token: str = ""
+) -> list[str]:
+    pr = read_pull_request(event)
+    found = check_pull_request_text(rules, pr)
     # A scratch repository git could not fully remove is left behind, not a
     # reason to fail: the runner is thrown away with it.
     with tempfile.TemporaryDirectory(prefix="attribution-", ignore_cleanup_errors=True) as scratch:
@@ -427,12 +441,7 @@ def check_pull_request(
             fetch(remote, scratch, pr.base, pr.head, token)
             repo = scratch
         for c in commits_of(repo, pr.base, pr.head):
-            where = f"commit {c.sha[:7]}"
-            for who in c.authors:
-                found += check_identity(rules, f"{where}, author", who)
-            for who in c.committers:
-                found += check_identity(rules, f"{where}, committer", who)
-            found += check_text(rules, f"{where}, message", c.message)
+            found += check_commit(rules, c)
     return found
 
 
