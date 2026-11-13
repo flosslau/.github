@@ -718,8 +718,10 @@ class CannotJudge(Case):
         process.communicate.side_effect = subprocess.TimeoutExpired(["git"], 30)
         process.wait.side_effect = subprocess.TimeoutExpired(["git"], 5)
         with mock.patch.object(check.subprocess, "Popen", return_value=process), \
-                mock.patch.object(check.os, "killpg"):
+                mock.patch.object(check.os, "killpg") as killpg:
             self.cannot_judge("git rev-list did not end within 30 seconds", event=event)
+        killpg.assert_called_once_with(4242, check.signal.SIGKILL)
+        process.kill.assert_called_once_with()
         self.assertEqual(process.communicate.call_args_list[1].kwargs["timeout"], check.KILL_GRACE_SECONDS)
         process.stdout.close.assert_called_once_with()
         process.stderr.close.assert_called_once_with()
