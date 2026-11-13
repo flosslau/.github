@@ -310,6 +310,28 @@ class Refused(Case):
         out = self.refused("author: e-mail aider@aider.chat (Aider)")
         self.assertIn("author: name Ada (aider) (Aider)", out)
 
+    def test_findings_come_in_the_order_of_the_pull_request(self):
+        sha = self.repo.commit(
+            "feat: x\n\nCo-authored-by: Copilot <copilot@github.com>\n",
+            author=("Claude", "noreply@anthropic.com"),
+            committer=("Ada (aider)", HUMAN[1]),
+        )[:7]
+        status, out = self.run_check(
+            login="claude[bot]",
+            title="Claude-Session: https://claude.ai/code/abc",
+            body="Amp-Thread-ID: https://ampcode.com/threads/T-1",
+        )
+        self.assertEqual(status, 1, out)
+        lines = out.splitlines()
+        self.assertEqual([line.strip() for line in lines[1:lines.index("How to fix it:")]], [
+            "pull request, opened by claude[bot] (Claude Code)",
+            "pull request title, line 1: Claude-Session: https://claude.ai/code/abc (Claude Code)",
+            "pull request description, line 1: Amp-Thread-ID: https://ampcode.com/threads/T-1 (Amp)",
+            f"commit {sha}, author: e-mail noreply@anthropic.com (Claude Code)",
+            f"commit {sha}, committer: name Ada (aider) (Aider)",
+            f"commit {sha}, message, line 3: Co-authored-by: Copilot <copilot@github.com> (GitHub Copilot)",
+        ])
+
     def test_name_suffix_on_the_committer(self):
         self.repo.commit("feat: x", committer=("Ada (aider)", HUMAN[1]))
         self.refused("committer: name Ada (aider) (Aider)")
