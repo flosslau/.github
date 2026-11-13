@@ -381,13 +381,13 @@ def read_pull_request(event: object) -> PullRequest:
     pr = event.get("pull_request") if isinstance(event, dict) else None
     if not isinstance(pr, dict):
         raise CannotJudge("the event is not a pull request event")
-    user = pr.get("user") or {}
-    if not isinstance(user, dict):
+    user = pr.get("user")
+    if not isinstance(user, dict | None):
         raise CannotJudge("the event's user is not an object")
     return PullRequest(
         base=commit_id(pr, "base"),
         head=commit_id(pr, "head"),
-        login=event_text(user.get("login"), "user login"),
+        login=event_text((user or {}).get("login"), "user login"),
         title=event_text(pr.get("title"), "title"),
         body=event_text(pr.get("body"), "description"),
     )
@@ -404,8 +404,9 @@ def commit_id(pr: dict, side: str) -> str:
 
 
 def event_text(value: object, what: str) -> str:
-    """A text of the event; absent or null reads as empty."""
-    value = value or ""
+    """A text of the event; absent or null reads as empty, any other type is refused."""
+    if value is None:
+        return ""
     if not isinstance(value, str):
         raise CannotJudge(f"the event's {what} is not text")
     return value

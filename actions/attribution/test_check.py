@@ -673,6 +673,10 @@ class CannotJudge(Case):
             "description is a list": ({"pull_request": {**ok, "body": ["x"]}}, "the event's description is not text"),
             "user is a string": ({"pull_request": {**ok, "user": "x"}}, "the event's user is not an object"),
             "login is a number": ({"pull_request": {**ok, "user": {"login": 5}}}, "the event's user login is not text"),
+            "title is zero": ({"pull_request": {**ok, "title": 0}}, "the event's title is not text"),
+            "description is an empty list": ({"pull_request": {**ok, "body": []}}, "the event's description is not text"),
+            "login is false": ({"pull_request": {**ok, "user": {"login": False}}}, "the event's user login is not text"),
+            "user is an empty list": ({"pull_request": {**ok, "user": []}}, "the event's user is not an object"),
             "commit id is a number": ({"pull_request": {**ok, "base": {"sha": 5}}}, "not a commit id: 5"),
         }.items():
             with self.subTest(name):
